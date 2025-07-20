@@ -1,6 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:get/get.dart';
-import 'package:studyhub/features/home/homepage.dart';
+import 'package:studyhub/features/afterlogin_into/complete.dart';
 
 class LoginController extends GetxController {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -16,6 +16,7 @@ class LoginController extends GetxController {
     firebaseUser.bindStream(_auth.authStateChanges());
   }
 
+  // 🔐 Login Function
   Future<void> login(String email, String password) async {
     print('Logging in with: $email');
     isLoading.value = true;
@@ -29,7 +30,10 @@ class LoginController extends GetxController {
 
       print('Login successful: ${userCredential.user?.email}');
       Get.snackbar('Success', 'Login successful');
-      Get.offAll(() => const Homepage());
+
+      // ✅ Go to Profile Setup
+      Get.offAll(() => const CompleteProfilePage());
+
     } on FirebaseAuthException catch (e) {
       errorMessage.value = e.message ?? 'Login failed';
       print('Login error: ${e.code} - ${e.message}');
@@ -39,6 +43,7 @@ class LoginController extends GetxController {
     }
   }
 
+  // 🆕 Register Function
   Future<void> register(String email, String password) async {
     isLoading.value = true;
     errorMessage.value = '';
@@ -47,11 +52,13 @@ class LoginController extends GetxController {
       final UserCredential userCredential = await _auth
           .createUserWithEmailAndPassword(email: email, password: password);
 
-      firebaseUser.value = userCredential.user; // ✅ set the user
+      firebaseUser.value = userCredential.user;
+
       Get.snackbar('Success', 'Account created successfully.');
 
-      // ✅ Navigate directly to Homepage
-      Get.offAll(() => const Homepage());
+      // ✅ Go to Profile Setup
+      Get.offAll(() => const CompleteProfilePage());
+
     } on FirebaseAuthException catch (e) {
       errorMessage.value = e.message ?? 'Registration failed';
       Get.snackbar('Error', errorMessage.value);
@@ -60,6 +67,7 @@ class LoginController extends GetxController {
     }
   }
 
+  // 🚪 Logout Function
   Future<void> logout() async {
     await _auth.signOut();
     Get.snackbar('Logged Out', 'You have been logged out.');

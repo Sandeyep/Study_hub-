@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:studyhub/features/login/login_controller.dart';
+import 'package:studyhub/features/login/login_controller/login_controller.dart';
 import 'package:studyhub/features/login/login_screen.dart';
 
 class RegisterPage extends StatefulWidget {
