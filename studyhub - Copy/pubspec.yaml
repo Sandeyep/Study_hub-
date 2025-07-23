@@ -89,7 +89,7 @@ dependencies:
   # image_picker: ^1.1.1
   # image_picker: ^0.8.7+4
   file_picker: ^6.1.1
-  intl: ^0.19.0
+  intl: ^0.20.2
   flutter_screenutil: ^5.9.0
   lucide_icons: ^0.257.0
   permission_handler: ^11.3.1
@@ -105,6 +105,9 @@ dependencies:
   cloudinary_url_gen: ^1.8.0
   http: 1.4.0
   cloudinary_public: 0.23.1
+  dio: ^5.8.0+1
+  easy_date_timeline: ^2.0.9
+  table_calendar: ^3.0.8
 
 
 
@@ -149,6 +152,8 @@ flutter:
     - assets/nav/mk.svg
     - assets/images/bg.jpg
     - assets/images/profile.jpg
+    - assets/images/searchbg.jpg
+    - assets/images/anu.jpg
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

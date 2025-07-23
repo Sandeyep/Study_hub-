@@ -30,9 +30,40 @@ class ProfilePage extends StatelessWidget {
               SizedBox(height: 20.h),
 
               ListTile(
-                leading: CircleAvatar(
-                  radius: 28.r,
-                  backgroundImage: const AssetImage('assets/profile.jpg'),
+                leading: StreamBuilder<DocumentSnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(FirebaseAuth.instance.currentUser?.uid)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return CircleAvatar(
+                        radius: 28.r,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      );
+                    }
+                    if (!snapshot.hasData || !snapshot.data!.exists) {
+                      return CircleAvatar(
+                        radius: 28.r,
+                        child: const Icon(Icons.person),
+                      );
+                    }
+
+                    final data = snapshot.data!.data() as Map<String, dynamic>;
+                    final profileImageUrl = data['profileImage'] as String?;
+
+                    if (profileImageUrl != null && profileImageUrl.isNotEmpty) {
+                      return CircleAvatar(
+                        radius: 28.r,
+                        backgroundImage: NetworkImage(profileImageUrl),
+                      );
+                    } else {
+                      return CircleAvatar(
+                        radius: 28.r,
+                        child: const Icon(Icons.person),
+                      );
+                    }
+                  },
                 ),
                 title: Text(
                   'Welcome',

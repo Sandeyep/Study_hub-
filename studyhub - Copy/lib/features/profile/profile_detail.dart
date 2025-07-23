@@ -2,11 +2,10 @@ import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart'; // for kIsWeb
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class ProfileDetailPage extends StatefulWidget {
   const ProfileDetailPage({super.key});
@@ -17,6 +16,7 @@ class ProfileDetailPage extends StatefulWidget {
 
 class _ProfileDetailPageState extends State<ProfileDetailPage> {
   File? _imageFile;
+  String? _profileImageUrl;
 
   final nameController = TextEditingController();
   final dobController = TextEditingController();
@@ -44,62 +44,6 @@ class _ProfileDetailPageState extends State<ProfileDetailPage> {
   void initState() {
     super.initState();
     fetchUserProfile();
-    _loadImagePath();
-  }
-
-  Future<void> _loadImagePath() async {
-    final prefs = await SharedPreferences.getInstance();
-    final path = prefs.getString('profile_image_path');
-    if (path != null) {
-      final file = File(path);
-      if (file.existsSync()) {
-        setState(() {
-          _imageFile = file;
-        });
-      }
-    }
-  }
-
-  Future<void> _saveImagePath(String path) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('profile_image_path', path);
-  }
-
-  Future<void> _pickImage() async {
-    final permission = await Permission.storage.request();
-    if (permission.isGranted) {
-      final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
-      if (picked != null) {
-        final appDir = await getApplicationDocumentsDirectory();
-        final fileName = picked.name;
-        final savedImage = await File(
-          picked.path,
-        ).copy('${appDir.path}/$fileName');
-
-        await _saveImagePath(savedImage.path);
-        setState(() {
-          _imageFile = savedImage;
-        });
-      }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Permission denied to access gallery')),
-      );
-    }
-  }
-
-  void _showFullImage() {
-    if (_imageFile == null) return;
-
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          child: Image.file(_imageFile!),
-        ),
-      ),
-    );
   }
 
   Future<void> fetchUserProfile() async {
@@ -122,6 +66,7 @@ class _ProfileDetailPageState extends State<ProfileDetailPage> {
           studentIdController.text = data['studentId'] ?? '';
           addressController.text = data['address'] ?? '';
           institutionController.text = data['institution'] ?? '';
+          _profileImageUrl = data['profileImage'] ?? '';
 
           if (allowedEducations.contains(data['education'])) {
             selectedEducation = data['education'];
@@ -132,20 +77,112 @@ class _ProfileDetailPageState extends State<ProfileDetailPage> {
           email = FirebaseAuth.instance.currentUser?.email ?? '';
           isLoading = false;
         });
-      } else {
-        setState(() {
-          selectedEducation = 'High School';
-          email = FirebaseAuth.instance.currentUser?.email ?? '';
-          isLoading = false;
-        });
       }
     } catch (e) {
       debugPrint('Error fetching user profile: $e');
       setState(() {
-        selectedEducation = 'High School';
         isLoading = false;
       });
     }
+  }
+
+  Future<void> _pickAndUploadImage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+
+    if (picked == null) return;
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      String? uploadedUrl;
+
+      if (kIsWeb) {
+        final bytes = await picked.readAsBytes();
+        uploadedUrl = await _uploadToCloudinaryWeb(bytes);
+      } else {
+        final file = File(picked.path);
+        uploadedUrl = await _uploadToCloudinaryFile(file);
+        _imageFile = file;
+      }
+
+      if (uploadedUrl != null) {
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid != null) {
+          await FirebaseFirestore.instance.collection('users').doc(uid).update({
+            'profileImage': uploadedUrl,
+          });
+        }
+
+        setState(() {
+          _profileImageUrl = uploadedUrl;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ Image uploaded to Cloudinary!')),
+        );
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('❌ Upload failed')));
+      }
+    } catch (e) {
+      debugPrint('Error: $e');
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<String?> _uploadToCloudinaryWeb(Uint8List bytes) async {
+    const cloudName = 'drjnvn0mb';
+    const uploadPreset = 'flutter_unsigned_preset';
+
+    final uri = Uri.parse('https://api.cloudinary.com/v1_1/$cloudName/upload');
+
+    final request = http.MultipartRequest('POST', uri)
+      ..fields['upload_preset'] = uploadPreset
+      ..files.add(
+        http.MultipartFile.fromBytes('file', bytes, filename: 'profile.jpg'),
+      );
+
+    final response = await request.send();
+
+    if (response.statusCode == 200) {
+      final respStr = await response.stream.bytesToString();
+      final secureUrl = RegExp(
+        r'"secure_url":"(.*?)"',
+      ).firstMatch(respStr)?.group(1);
+      return secureUrl?.replaceAll(r'\/', '/');
+    }
+    return null;
+  }
+
+  Future<String?> _uploadToCloudinaryFile(File file) async {
+    const cloudName = 'YOUR_CLOUD_NAME';
+    const uploadPreset = 'YOUR_UNSIGNED_UPLOAD_PRESET';
+
+    final uri = Uri.parse(
+      'https://api.cloudinary.com/v1_1/$cloudName/image/upload',
+    );
+
+    final request = http.MultipartRequest('POST', uri)
+      ..fields['upload_preset'] = uploadPreset
+      ..files.add(await http.MultipartFile.fromPath('file', file.path));
+
+    final response = await request.send();
+
+    if (response.statusCode == 200) {
+      final respStr = await response.stream.bytesToString();
+      final secureUrl = RegExp(
+        r'"secure_url":"(.*?)"',
+      ).firstMatch(respStr)?.group(1);
+      return secureUrl?.replaceAll(r'\/', '/');
+    }
+    return null;
   }
 
   Future<void> updateUserProfile() async {
@@ -164,26 +201,12 @@ class _ProfileDetailPageState extends State<ProfileDetailPage> {
         'education': selectedEducation ?? 'High School',
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profile updated successfully')),
-      );
-    } catch (e) {
-      debugPrint('Error updating profile: $e');
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Failed to update profile')));
+      ).showSnackBar(const SnackBar(content: Text('✅ Profile updated')));
+    } catch (e) {
+      debugPrint('Error updating profile: $e');
     }
-  }
-
-  @override
-  void dispose() {
-    nameController.dispose();
-    dobController.dispose();
-    phoneController.dispose();
-    studentIdController.dispose();
-    addressController.dispose();
-    institutionController.dispose();
-    super.dispose();
   }
 
   @override
@@ -194,132 +217,85 @@ class _ProfileDetailPageState extends State<ProfileDetailPage> {
 
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: primaryColor,
         title: const Text('Edit Profile'),
-        centerTitle: true,
-        leading: const BackButton(),
+        backgroundColor: primaryColor,
       ),
-      backgroundColor: Colors.teal.shade50,
       body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        padding: const EdgeInsets.all(20),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Profile image with shadow and edit icon
-            Center(
-              child: Stack(
-                children: [
-                  CircleAvatar(
-                    radius: 60,
-                    backgroundColor: Colors.teal.shade200,
-                    backgroundImage: _imageFile != null
-                        ? FileImage(_imageFile!)
-                        : null,
-                    child: _imageFile == null
-                        ? Text(
-                            'Upload\nImage',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.teal.shade700,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          )
-                        : null,
+            Stack(
+              children: [
+                CircleAvatar(
+                  radius: 60,
+                  backgroundImage:
+                      _profileImageUrl != null && _profileImageUrl!.isNotEmpty
+                      ? NetworkImage(_profileImageUrl!)
+                      : null,
+                  child: _profileImageUrl == null || _profileImageUrl!.isEmpty
+                      ? const Icon(Icons.person, size: 60)
+                      : null,
+                ),
+                Positioned(
+                  bottom: 0,
+                  right: 4,
+                  child: FloatingActionButton.small(
+                    backgroundColor: primaryColor,
+                    onPressed: _pickAndUploadImage,
+                    child: const Icon(Icons.camera_alt, color: Colors.white),
                   ),
-                  Positioned(
-                    bottom: 0,
-                    right: 4,
-                    child: Material(
-                      color: primaryColor,
-                      shape: const CircleBorder(),
-                      child: IconButton(
-                        icon: const Icon(Icons.camera_alt, color: Colors.white),
-                        onPressed: _pickImage,
-                        tooltip: 'Change Profile Picture',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            const SizedBox(height: 24),
-
-            // Name field
+            const SizedBox(height: 20),
             _buildTextField(
               'Name',
               controller: nameController,
               icon: Icons.person,
             ),
-
-            // Email field (readonly)
             _buildTextField(
               'Email',
               value: email,
               enabled: false,
               icon: Icons.email,
             ),
-
-            // Date of birth
             _buildTextField(
               'Date of Birth',
               controller: dobController,
               icon: Icons.calendar_today,
             ),
-
-            // Phone number
             _buildTextField(
               'Phone Number',
               controller: phoneController,
               icon: Icons.phone,
             ),
-
-            // Student ID
             _buildTextField(
               'Student ID',
               controller: studentIdController,
               icon: Icons.school,
             ),
-
-            // Institution
             _buildTextField(
               'Institution',
               controller: institutionController,
               icon: Icons.account_balance,
             ),
-
-            // Education dropdown
             buildEducationDropdown(),
-
-            // Gender selector
             _buildGenderSelector(),
-
-            // Address multiline
             _buildTextField(
               'Address',
               controller: addressController,
               icon: Icons.home,
               maxLines: 2,
-              keyboardType: TextInputType.multiline,
             ),
-
-            const SizedBox(height: 30),
-
+            const SizedBox(height: 20),
             ElevatedButton(
               onPressed: updateUserProfile,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primaryColor,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: primaryColor),
               child: const Text(
-                'Update Profile',
-                style: TextStyle(fontSize: 18, color: Colors.white),
+                'Save Profile',
+                style: TextStyle(color: Colors.white),
               ),
             ),
-
-            const SizedBox(height: 30),
           ],
         ),
       ),
@@ -333,7 +309,6 @@ class _ProfileDetailPageState extends State<ProfileDetailPage> {
     bool enabled = true,
     IconData? icon,
     int maxLines = 1,
-    TextInputType keyboardType = TextInputType.text,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -342,82 +317,67 @@ class _ProfileDetailPageState extends State<ProfileDetailPage> {
         initialValue: controller == null ? value : null,
         enabled: enabled,
         maxLines: maxLines,
-        keyboardType: keyboardType,
         decoration: InputDecoration(
           labelText: label,
           prefixIcon: icon != null ? Icon(icon, color: primaryColor) : null,
           filled: true,
           fillColor: enabled ? Colors.white : Colors.grey.shade200,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-          focusedBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: primaryColor, width: 2),
-            borderRadius: BorderRadius.circular(12),
-          ),
         ),
       ),
     );
   }
 
   Widget buildEducationDropdown() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: DropdownButtonFormField<String>(
-        value: selectedEducation,
-        decoration: InputDecoration(
-          labelText: 'Education',
-          prefixIcon: Icon(Icons.menu_book, color: primaryColor),
-          filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-          focusedBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: primaryColor, width: 2),
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-        items: allowedEducations
-            .map((edu) => DropdownMenuItem(value: edu, child: Text(edu)))
-            .toList(),
-        onChanged: (val) {
-          setState(() {
-            selectedEducation = val;
-          });
-        },
+    return DropdownButtonFormField<String>(
+      value: selectedEducation,
+      decoration: InputDecoration(
+        labelText: 'Education',
+        prefixIcon: Icon(Icons.menu_book, color: primaryColor),
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
+      items: allowedEducations
+          .map((edu) => DropdownMenuItem(value: edu, child: Text(edu)))
+          .toList(),
+      onChanged: (val) {
+        setState(() {
+          selectedEducation = val;
+        });
+      },
     );
   }
 
   Widget _buildGenderSelector() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Row(
-        children: [
-          const Text('Gender:', style: TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Wrap(
-              spacing: 20,
-              children: ['Male', 'Female', 'Other'].map((gender) {
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Radio<String>(
-                      value: gender,
-                      groupValue: _selectedGender,
-                      activeColor: primaryColor,
-                      onChanged: (value) {
-                        setState(() {
-                          _selectedGender = value!;
-                        });
-                      },
-                    ),
-                    Text(gender),
-                  ],
-                );
-              }).toList(),
-            ),
+    return Row(
+      children: [
+        const Text('Gender:', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Wrap(
+            spacing: 20,
+            children: ['Male', 'Female', 'Other'].map((gender) {
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Radio<String>(
+                    value: gender,
+                    groupValue: _selectedGender,
+                    activeColor: primaryColor,
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedGender = value!;
+                      });
+                    },
+                  ),
+                  Text(gender),
+                ],
+              );
+            }).toList(),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

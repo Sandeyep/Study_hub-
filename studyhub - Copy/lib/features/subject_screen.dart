@@ -1,9 +1,13 @@
+import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:studyhub/features/resource/subject/subject_detail.dart';
+import 'package:studyhub/home/widget/upload_file_btn.dart';
 
 class SubjectPage extends StatefulWidget {
-  final String userId; // NEW: add userId here
+  final String userId;
   final String institutionId;
   final String semesterOrClassId;
   final String semesterOrClassName;
@@ -15,7 +19,7 @@ class SubjectPage extends StatefulWidget {
 
   const SubjectPage({
     super.key,
-    required this.userId, // required userId
+    required this.userId,
     required this.institutionId,
     required this.semesterOrClassId,
     required this.semesterOrClassName,
@@ -32,6 +36,133 @@ class SubjectPage extends StatefulWidget {
 
 class _SubjectPageState extends State<SubjectPage> {
   bool _isGridView = false;
+
+  void _showUploadDialog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => UploadFileBtn(
+        userId: widget.userId,
+        institutionId: widget.institutionId,
+        semesterId: widget.semesterId,
+        onFileSelectedWithSubject: (file, subjectId) {
+          return _uploadFileToSubject(file, subjectId);
+        },
+        onImageSelected: (file) async {
+          return;
+        },
+        onPdfSelected: (file) async {
+          return;
+        },
+      ),
+    );
+  }
+
+  Future<void> _uploadFileToSubject(File file, String subjectId) async {
+    if (!_validateIds(subjectId)) return;
+
+    try {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(_uploadingSnackbar());
+
+      final storagePath =
+          'users/${widget.userId}/files/${DateTime.now().millisecondsSinceEpoch}_${file.path.split('/').last}';
+      final storageRef = FirebaseStorage.instance.ref().child(storagePath);
+      await storageRef.putFile(file);
+      final downloadUrl = await storageRef.getDownloadURL();
+
+      await _saveFileMetadata(subjectId, file, downloadUrl);
+
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('✅ File uploaded successfully!')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('❌ Upload failed: ${e.toString()}')),
+      );
+    }
+  }
+
+  bool _validateIds(String subjectId) {
+    if (widget.userId.isEmpty ||
+        widget.institutionId.isEmpty ||
+        widget.semesterOrClassId.isEmpty ||
+        subjectId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Missing required IDs for upload')),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  SnackBar _uploadingSnackbar() {
+    return const SnackBar(
+      content: Row(
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(width: 16),
+          Text('Uploading...'),
+        ],
+      ),
+      duration: Duration(minutes: 1),
+    );
+  }
+
+  Future<void> _saveFileMetadata(
+    String subjectId,
+    File file,
+    String url,
+  ) async {
+    final fileName = file.path.split('/').last;
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(widget.userId)
+        .collection('institutions')
+        .doc(widget.institutionId)
+        .collection(widget.collectionName)
+        .doc(widget.semesterOrClassId)
+        .collection('subjects')
+        .doc(subjectId)
+        .collection('files')
+        .add({
+          'name': fileName,
+          'url': url,
+          'type': _getFileType(fileName),
+          'uploadedAt': FieldValue.serverTimestamp(),
+        });
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(widget.userId)
+        .collection('institutions')
+        .doc(widget.institutionId)
+        .collection(widget.collectionName)
+        .doc(widget.semesterOrClassId)
+        .collection('subjects')
+        .doc(subjectId)
+        .update({'fileCount': FieldValue.increment(1)});
+  }
+
+  String _getFileType(String fileName) {
+    final ext = fileName.split('.').last.toLowerCase();
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+        return 'photo';
+      case 'pdf':
+        return 'pdf';
+      case 'docx':
+        return 'docx';
+      case 'pptx':
+        return 'pptx';
+      default:
+        return 'file';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,9 +182,9 @@ class _SubjectPageState extends State<SubjectPage> {
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
-            .collection('users') // user scoped
+            .collection('users')
             .doc(widget.userId)
-            .collection('institutions') // user scoped institutions
+            .collection('institutions')
             .doc(widget.institutionId)
             .collection(widget.collectionName)
             .doc(widget.semesterOrClassId)
@@ -89,7 +220,6 @@ class _SubjectPageState extends State<SubjectPage> {
           }
 
           final subjects = snapshot.data!.docs;
-
           return _isGridView
               ? _buildGridView(subjects)
               : _buildListView(subjects);
@@ -245,9 +375,19 @@ class _SubjectPageState extends State<SubjectPage> {
     );
   }
 
+  void _handleSubjectAction(String action, QueryDocumentSnapshot subject) {
+    switch (action) {
+      case 'rename':
+        _renameSubject(subject);
+        break;
+      case 'delete':
+        _deleteSubject(subject.id);
+        break;
+    }
+  }
+
   Future<void> _addSubject(BuildContext context) async {
     final controller = TextEditingController();
-
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -271,9 +411,10 @@ class _SubjectPageState extends State<SubjectPage> {
               final name = controller.text.trim();
               if (name.isNotEmpty) {
                 try {
+                  print('Adding subject: $name');
                   await FirebaseFirestore.instance
                       .collection('users')
-                      .doc(widget.userId) // user scoped
+                      .doc(widget.userId)
                       .collection('institutions')
                       .doc(widget.institutionId)
                       .collection(widget.collectionName)
@@ -286,11 +427,10 @@ class _SubjectPageState extends State<SubjectPage> {
                       });
                   if (mounted) Navigator.pop(context);
                 } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed to add subject: $e')),
-                    );
-                  }
+                  print('Error adding subject: $e');
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text('Error: $e')));
                 }
               }
             },
@@ -301,28 +441,13 @@ class _SubjectPageState extends State<SubjectPage> {
     );
   }
 
-  void _handleSubjectAction(String action, QueryDocumentSnapshot subject) {
-    switch (action) {
-      case 'rename':
-        _renameSubject(subject);
-        break;
-      case 'delete':
-        _deleteSubject(subject.id);
-        break;
-    }
-  }
-
   Future<void> _renameSubject(QueryDocumentSnapshot subject) async {
     final controller = TextEditingController(text: subject['name'] ?? '');
-
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Rename Subject'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(border: OutlineInputBorder()),
-        ),
+        content: TextField(controller: controller),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -333,25 +458,8 @@ class _SubjectPageState extends State<SubjectPage> {
             onPressed: () async {
               final newName = controller.text.trim();
               if (newName.isNotEmpty) {
-                try {
-                  await FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(widget.userId)
-                      .collection('institutions')
-                      .doc(widget.institutionId)
-                      .collection(widget.collectionName)
-                      .doc(widget.semesterOrClassId)
-                      .collection('subjects')
-                      .doc(subject.id)
-                      .update({'name': newName});
-                  if (mounted) Navigator.pop(context);
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed to rename subject: $e')),
-                    );
-                  }
-                }
+                await subject.reference.update({'name': newName});
+                if (mounted) Navigator.pop(context);
               }
             },
             child: const Text('Save', style: TextStyle(color: Colors.white)),
@@ -382,24 +490,16 @@ class _SubjectPageState extends State<SubjectPage> {
     );
 
     if (confirmed == true) {
-      try {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(widget.userId)
-            .collection('institutions')
-            .doc(widget.institutionId)
-            .collection(widget.collectionName)
-            .doc(widget.semesterOrClassId)
-            .collection('subjects')
-            .doc(subjectId)
-            .delete();
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to delete subject: $e')),
-          );
-        }
-      }
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.userId)
+          .collection('institutions')
+          .doc(widget.institutionId)
+          .collection(widget.collectionName)
+          .doc(widget.semesterOrClassId)
+          .collection('subjects')
+          .doc(subjectId)
+          .delete();
     }
   }
 }

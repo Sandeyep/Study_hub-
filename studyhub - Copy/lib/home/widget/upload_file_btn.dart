@@ -4,56 +4,70 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:studyhub/features/resource/subject/subject_selection_dialog.dart';
 
-class UploadFileBtn extends StatefulWidget {
-  final Function(File) onImageSelected;
-  final Function(File) onPdfSelected;
+class UploadFileBtn extends StatelessWidget {
+  final String userId;
+  final String institutionId;
+  final String semesterId;
+  final Function(File, String) onFileSelectedWithSubject;
+  final void Function(File file) onImageSelected;
+  final void Function(File file) onPdfSelected;
 
-  const UploadFileBtn({
+  UploadFileBtn({
     super.key,
+    required this.userId,
+    required this.institutionId,
+    required this.semesterId,
+    required this.onFileSelectedWithSubject,
     required this.onImageSelected,
     required this.onPdfSelected,
   });
 
-  @override
-  State<UploadFileBtn> createState() => _UploadFileBtnState();
-}
-
-class _UploadFileBtnState extends State<UploadFileBtn> {
   final ImagePicker _picker = ImagePicker();
 
-  Future<void> _takePhoto() async {
+  Future<File?> _takePhoto(BuildContext context) async {
     var status = await Permission.camera.request();
     if (status.isGranted) {
       final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
-      if (photo != null) {
-        widget.onImageSelected(File(photo.path));
-        Navigator.pop(context);
-      }
-    } else {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Camera permission denied")));
+      if (photo != null) return File(photo.path);
     }
+    return null;
   }
 
-  Future<void> _pickFromGallery() async {
+  Future<File?> _pickFromGallery(BuildContext context) async {
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-    if (image != null) {
-      widget.onImageSelected(File(image.path));
-      Navigator.pop(context);
-    }
+    if (image != null) return File(image.path);
+    return null;
   }
 
-  Future<void> _pickFile() async {
+  Future<File?> _pickFile(BuildContext context) async {
     final result = await FilePicker.platform.pickFiles(type: FileType.any);
     if (result != null && result.files.single.path != null) {
-      widget.onPdfSelected(File(result.files.single.path!));
+      return File(result.files.single.path!);
+    }
+    return null;
+  }
+
+  Future<void> _handleFileSelection(BuildContext context, File file) async {
+    final subjectId = await showDialog<String>(
+      context: context,
+      builder: (context) => SubjectSelectionDialog(
+        userId: userId,
+        institutionId: institutionId,
+        semesterId: semesterId,
+        onSubjectSelected: (subjectId) => Navigator.pop(context, subjectId),
+      ),
+    );
+
+    if (subjectId != null && context.mounted) {
+      onFileSelectedWithSubject(file, subjectId);
       Navigator.pop(context);
     }
   }
 
-  Widget _buildOption({
+  Widget _buildOption(
+    BuildContext context, {
     required IconData icon,
     required String label,
     required Color color,
@@ -122,24 +136,45 @@ class _UploadFileBtnState extends State<UploadFileBtn> {
             Row(
               children: [
                 _buildOption(
+                  context,
                   icon: Icons.camera_alt,
                   label: 'Take Photo',
                   color: Colors.teal,
-                  onTap: _takePhoto,
+                  onTap: () async {
+                    final file = await _takePhoto(context);
+                    if (file != null) {
+                      onImageSelected(file);
+                      await _handleFileSelection(context, file);
+                    }
+                  },
                 ),
                 const SizedBox(width: 12),
                 _buildOption(
+                  context,
                   icon: Icons.image,
                   label: 'From Gallery',
                   color: Colors.blue,
-                  onTap: _pickFromGallery,
+                  onTap: () async {
+                    final file = await _pickFromGallery(context);
+                    if (file != null) {
+                      onImageSelected(file);
+                      await _handleFileSelection(context, file);
+                    }
+                  },
                 ),
                 const SizedBox(width: 12),
                 _buildOption(
+                  context,
                   icon: Icons.upload_file,
                   label: 'Upload File',
                   color: Colors.deepPurple,
-                  onTap: _pickFile,
+                  onTap: () async {
+                    final file = await _pickFile(context);
+                    if (file != null) {
+                      onPdfSelected(file);
+                      await _handleFileSelection(context, file);
+                    }
+                  },
                 ),
               ],
             ),
